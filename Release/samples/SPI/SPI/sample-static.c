@@ -4,7 +4,7 @@
  * \author FTDI
  * \date 20110512
  *
- * Copyright © 2000-2014 Future Technology Devices International Limited
+ * Copyright ï¿½ 2000-2014 Future Technology Devices International Limited
  *
  *
  * THIS SOFTWARE IS PROVIDED BY FUTURE TECHNOLOGY DEVICES INTERNATIONAL LIMITED ``AS IS'' AND ANY EXPRESS
@@ -60,16 +60,8 @@ encountered \n",__FILE__, __LINE__, __FUNCTION__);exit(1);}else{;}};
 
 /* Application specific macro definations */
 #define SPI_DEVICE_BUFFER_SIZE		256
-#define SPI_WRITE_COMPLETION_RETRY		10
-#define START_ADDRESS_EEPROM 	0x00 /*read/write start address inside the EEPROM*/
-#define END_ADDRESS_EEPROM		0x10
-#define RETRY_COUNT_EEPROM		10	/* number of retries if read/write fails */
 #define CHANNEL_TO_OPEN			0	/*0 for first available channel, 1 for next... */
-#define SPI_SLAVE_0				0
-#define SPI_SLAVE_1				1
-#define SPI_SLAVE_2				2
-#define DATA_OFFSET				4
-#define USE_WRITEREAD			0
+#define CHIP_ADDR_ALL			0
 
 /******************************************************************************/
 /*								Global variables							  	    */
@@ -77,24 +69,20 @@ encountered \n",__FILE__, __LINE__, __FUNCTION__);exit(1);}else{;}};
 static FT_HANDLE ftHandle;
 static uint8 buffer[SPI_DEVICE_BUFFER_SIZE] = {0};
 
-/******************************************************************************/
-/*						Public function definitions						  		   */
-/******************************************************************************/
 /*!
- * \brief Writes to EEPROM
+ * \brief Reads from Hittie RF PLLs with integrated VCO (Read HMC Device)
  *
- * This function writes a byte to a specified address within the 93LC56B EEPROM
+ * This function reads a register from a specified address within the HMC Devices
  *
- * \param[in] slaveAddress Address of the I2C slave (EEPROM)
- * \param[in] registerAddress Address of the memory location inside the slave to where the byte
- *			is to be written
- * \param[in] data The byte that is to be written
+ * \param[in] chipAddress: 3bit device address for OpenMode only, 3'b000 for all devices)
+ * \param[in] address: Address of the register to read
+ * \param[in] *data: Data read from register
  * \return Returns status code of type FT_STATUS(see D2XX Programmer's Guide)
- * \sa Datasheet of 93LC56B http://ww1.microchip.com/downloads/en/DeviceDoc/21794F.pdf
+ * \sa Operating guide see https://www.analog.com/media/en/technical-documentation/user-guides/pll_operating_guide_rf_vcos.pdf
  * \note
  * \warning
  */
-static FT_STATUS read_byte(uint8 slaveAddress, uint8 address, uint16 *data)
+static FT_STATUS read_reg(uint8 chipAddress, uint8 address, uint16 *data)
 {
 	uint32 sizeToTransfer = 0;
 	uint32 sizeTransfered;
@@ -134,106 +122,61 @@ static FT_STATUS read_byte(uint8 slaveAddress, uint8 address, uint16 *data)
 	return status;
 }
 
+/******************************************************************************/
+/*						Public function definitions						  		   */
+/******************************************************************************/
 /*!
- * \brief Reads from EEPROM
+ * \brief Writes to Hittie RF PLLs with integrated VCO (Write HMC Device) 
  *
- * This function reads a byte from a specified address within the 93LC56B EEPROM
+ * This function writes a register on specified address within the HMC Devices
  *
- * \param[in] slaveAddress Address of the I2C slave (EEPROM)
- * \param[in] registerAddress Address of the memory location inside the slave from where the
- *			byte is to be read
- * \param[in] *data Address to where the byte is to be read
+ * \param[in] chipAddress: 3bit device address for OpenMode only, 3'b000 for all devices)
+ * \param[in] address: Address of the register to write
+ * \param[in] data: Data write to register
  * \return Returns status code of type FT_STATUS(see D2XX Programmer's Guide)
- * \sa Datasheet of 93LC56B http://ww1.microchip.com/downloads/en/DeviceDoc/21794F.pdf
+ * \sa Operating guide see https://www.analog.com/media/en/technical-documentation/user-guides/pll_operating_guide_rf_vcos.pdf
  * \note
  * \warning
  */
-static FT_STATUS write_byte(uint8 slaveAddress, uint8 address, uint16 data)
+static FT_STATUS write_reg(uint8 chipAddress, uint8 address, uint32 data)
 {
 	uint32 sizeToTransfer = 0;
 	uint32 sizeTransfered=0;
-	uint8 writeComplete=0;
-	uint32 retry=0;
 	FT_STATUS status;
 
-	/* Write command EWEN(with CS_High -> CS_Low) */
-	sizeToTransfer=11;
+	/* Write register */
+	sizeToTransfer=4;
 	sizeTransfered=0;
-	buffer[0]=0x9F;/* SPI_EWEN -> binary 10011xxxxxx (11bits) */
-	buffer[1]=0xFF;
+	/*     buffer[0]   |      buffer[1]  |  ...*/
+	/*       bit                bit         ...*/
+	/* 7 6 5 4 3 2 1 0 | 7 6 5 4 3 2 1 0 |  ...*/
+	/*>start-------------------------------end>*/
+	/*              Example:                   */
+	/*      0x9F       |        0xAA     |  ...*/
+	/* 1 0 0 1 1 1 1 1 | 1 0 1 0 1 0 1 0 |  ...*/
+
+	/*	Loading 24bit data to [31:8]	*/
+	buffer[0]=(uint8)(data>>16);/* MSB First, stop at the specified length(bits)*/
+	buffer[1]=(uint8)(data>>8);
+	buffer[2]=(uint8)(data>>0);
+
+	/*	Loading 5bit Reg address and 3bit Chip address to [7:0] */
+	/*  RegAddress[7:4] ChipAddress[3:0] */
+	if(chipAddress>7 || address>31){
+		printf("Wrong chipAddress or Register Address!\n");
+		// return status;
+	}
+	buffer[3]=(address<<3 | chipAddress);
+
 	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BITS|
+		SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES|
 		SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE|
 		SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
 	APP_CHECK_STATUS(status);
 
-	/* CS_High + Write command + Address */
-	sizeToTransfer=1;
-	sizeTransfered=0;
-	buffer[0] = 0xA0;/* Write command (3bits) */
-	buffer[0] = buffer[0] | ( ( address >> 3) & 0x0F );/*5 most significant add bits*/
-	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES|
-		SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE);
-	APP_CHECK_STATUS(status);
-
-	/*Write 3 least sig address bits */
-	sizeToTransfer=3;
-	sizeTransfered=0;
-	buffer[0] = ( address & 0x07 ) << 5; /* least significant 3 address bits */
-	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BITS);
-	APP_CHECK_STATUS(status);
-
-	/* Write 2 byte data + CS_Low */
-	sizeToTransfer=2;
-	sizeTransfered=0;
-	buffer[0] = (uint8)(data & 0xFF);
-	buffer[1] = (uint8)((data & 0xFF00)>>8);
-	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES|
-		SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
-	APP_CHECK_STATUS(status);
-
-	/* Wait until D0 is high */
-#if 1
-	/* Strobe Chip Select */
-	sizeToTransfer=0;
-	sizeTransfered=0;
-	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BITS|
-		SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE);
-	APP_CHECK_STATUS(status);
 #ifndef __linux__
 	Sleep(10);
 #endif
-	sizeToTransfer=0;
-	sizeTransfered=0;
-	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BITS|
-		SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
-	APP_CHECK_STATUS(status);
-#else
-	retry=0;
-	state=FALSE;
-	SPI_IsBusy(ftHandle,&state);
-	while((FALSE==state) && (retry<SPI_WRITE_COMPLETION_RETRY))
-	{
-		printf("SPI device is busy(%u)\n",(unsigned)retry);
-		SPI_IsBusy(ftHandle,&state);
-		retry++;
-	}
-#endif
-	/* Write command EWEN(with CS_High -> CS_Low) */
-	sizeToTransfer=11;
-	sizeTransfered=0;
-	buffer[0]=0x8F;/* SPI_EWEN -> binary 10011xxxxxx (11bits) */
-	buffer[1]=0xFF;
-	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BITS|
-		SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE|
-		SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
-	APP_CHECK_STATUS(status);
 	return status;
 }
 
@@ -256,14 +199,14 @@ int main()
 	ChannelConfig channelConf = {0};
 	uint8 address = 0;
 	uint32 channels = 0;
-	uint16 data = 0;
+	uint32 data = 0;
 	uint8 i = 0;
 	uint8 latency = 255;	
 	
 	channelConf.ClockRate = 5000;
 	channelConf.LatencyTimer = latency;
-	channelConf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3;// | SPI_CONFIG_OPTION_CS_ACTIVELOW;
-	channelConf.Pin = 0x00000000;/*FinalVal-FinalDir-InitVal-InitDir (for dir 0=in, 1=out)*/
+	channelConf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 | SPI_CONFIG_OPTION_CS_ACTIVELOW;// | SPI_CONFIG_OPTION_CS_ACTIVELOW;
+	channelConf.Pin = 0xffFFffFF;/*FinalVal-FinalDir-InitVal-InitDir (for dir 0=in, 1=out)*/
 
 	/* init library */
 #ifdef _MSC_VER
@@ -293,54 +236,22 @@ int main()
 		/* Open the first available channel */
 		status = SPI_OpenChannel(CHANNEL_TO_OPEN,&ftHandle);
 		APP_CHECK_STATUS(status);
-		printf("\nhandle=0x%x status=0x%x\n",(unsigned int)ftHandle,status);
+		printf("\nhandle=0x%x status=0x%x SPI Channel Opened. All pins are inputs(float) now!\n",(unsigned int)ftHandle,status);
 		status = SPI_InitChannel(ftHandle,&channelConf);
 		APP_CHECK_STATUS(status);
+		printf("\nhandle=0x%x status=0x%x SPI Channel Init done. All pins are configured!\n",(unsigned int)ftHandle,status);
 
-#if USE_WRITEREAD	
-		{
-			uint8 k,l;
-			uint8 inBuffer[100];
-			uint8 outBuffer[]={0x81,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,30,31,32,33,34,35,36,37,38,39};
-			uint32 sizeToTransfer,sizeTransferred;
-			for(k=0; k<5; k++)
-			{
-				printf("LoopCount = %u ",(unsigned)k);
-				sizeToTransfer=10;
-				sizeTransferred=0;
-#if 1 // BYTES
-				status = SPI_ReadWrite(ftHandle, inBuffer, outBuffer+k, sizeToTransfer, &sizeTransferred,
-					SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES|
-					SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE|
-					SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
-#else // BITES
-				status = SPI_ReadWrite(ftHandle, inBuffer, outBuffer+k, sizeToTransfer*8, &sizeTransferred,
-					SPI_TRANSFER_OPTIONS_SIZE_IN_BITS|
-					SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE|
-					SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
-#endif
-				APP_CHECK_STATUS(status);
-				printf("status=0x%x sizeTransferred=%u\n", status, sizeTransferred);
-				for(l=0;l<sizeToTransfer;l++)
-					printf("0x%x\n",(unsigned)inBuffer[l]);
-				printf("\n");
-			}
-		}		
-#else // USE_WRITEREAD
-		for(address=START_ADDRESS_EEPROM;address<END_ADDRESS_EEPROM;address++)
-		{
-			printf("writing address = %02d data = %d\n",address,address+DATA_OFFSET);
-			write_byte(SPI_SLAVE_0, address,(uint16)address+DATA_OFFSET);
-		}
+		address = 0x04;
+		data = 0xF0F0F0;
+		printf("writing address = %02d data = %x\n",address,data);
+		write_reg(CHIP_ADDR_ALL, address, data);
+		printf("Write done.\n");
 
-		for(address=START_ADDRESS_EEPROM;address<END_ADDRESS_EEPROM;address++)
-		{
-			read_byte(SPI_SLAVE_0, address,&data);
-			printf("reading address = %02d data = %d\n",address,data);
-		}
-#endif // USE_WRITEREAD
+		// read_reg(SPI_SLAVE_0, address,&data);
+		// printf("reading address = %02d data = %d\n",address,data);
 
 		status = SPI_CloseChannel(ftHandle);
+		printf("SPI Channel Closed.\n");
 	}
 
 #ifdef _MSC_VER

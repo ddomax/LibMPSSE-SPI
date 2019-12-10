@@ -1,5 +1,13 @@
 Modify the example(sample-static.c) for control AD9957.  
 AD9957 should be configure in a 4-wired SPI mode with seperated IO pins rather than a bi-directional 3-wired port mode.  
+------
+SDIO—Serial Data Input/Output
+Data is always written into the AD9957 on this pin. However,
+this pin can be used as a bidirectional data line. Bit 1 of CFR1,
+Register Address 0x00, controls the configuration of this pin.
+The default is cleared, which configures the SDIO pin as
+bidirectional.
+------
 Use I/O_RESET to reset the SPI Port State Machine without affecting the addressable registers contents.  
 A rising edge on IO_UPDATE with a pulse width that is longer than one SYNC_CLK make data in the port buffer to be written to active registers. (automatic update can be configured through Internal I/O Update Active bit)   
 ------  
@@ -19,6 +27,11 @@ OSK(default disabled, omitting by the chip)
 EXT_PWR_DWN  
 MASTER_RESET  
 PLL_LOCK(for monitor)  
+------
+SYSCLK cycle refers to the actual clock frequency used on-chip by the DDS. If the reference clock multiplier is used to multiply the external reference clock frequency,
+the SYSCLK frequency is the external frequency multiplied by the reference clock multiplication factor. If the reference clock multiplier and divider are not used, the
+SYSCLK frequency is the same as the external reference clock frequency.
+------
   
 After plug in the FTXXX device, run the following command first to remove the pre-built virtual COM driver.  
     > sudo rmmod ftdi_sio  

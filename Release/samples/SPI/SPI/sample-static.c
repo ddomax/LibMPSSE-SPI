@@ -40,6 +40,8 @@
 /* OS specific libraries */
 #ifdef _WIN32
 #include<windows.h>
+#else
+#include<unistd.h>
 #endif
 
 /* Include D2XX header*/
@@ -47,6 +49,9 @@
 
 /* Include libMPSSE header */
 #include "libMPSSE_spi.h"
+
+/* Include AD9957 header */
+#include "AD9957Parameter.h"
 
 /******************************************************************************/
 /*								Macro and type defines							   */
@@ -61,7 +66,6 @@ encountered \n",__FILE__, __LINE__, __FUNCTION__);exit(1);}else{;}};
 /* Application specific macro definations */
 #define SPI_DEVICE_BUFFER_SIZE		256
 #define CHANNEL_TO_OPEN			0	/*0 for first available channel, 1 for next... */
-#define CHIP_ADDR_ALL			0
 
 /******************************************************************************/
 /*								Global variables							  	    */
@@ -70,54 +74,53 @@ static FT_HANDLE ftHandle;
 static uint8 buffer[SPI_DEVICE_BUFFER_SIZE] = {0};
 
 /*!
- * \brief Reads from Hittie RF PLLs with integrated VCO (Read HMC Device)
+ * \brief Reads from AD9957
  *
- * This function reads a register from a specified address within the HMC Devices
+ * This function reads a register from a specified address within the device
  *
- * \param[in] chipAddress: 3bit device address for OpenMode only, 3'b000 for all devices)
  * \param[in] address: Address of the register to read
  * \param[in] *data: Data read from register
  * \return Returns status code of type FT_STATUS(see D2XX Programmer's Guide)
- * \sa Operating guide see https://www.analog.com/media/en/technical-documentation/user-guides/pll_operating_guide_rf_vcos.pdf
+ * \sa Operating guide see AD9957 Datasheet
  * \note
  * \warning
  */
-static FT_STATUS read_reg(uint8 chipAddress, uint8 address, uint16 *data)
+static FT_STATUS readReg(uint8 address, uint8 *data, uint8 size)
 {
 	uint32 sizeToTransfer = 0;
-	uint32 sizeTransfered;
-	uint8 writeComplete=0;
-	uint32 retry=0;
+	uint32 sizeTransfered = 0;
 	FT_STATUS status;
+	static const uint8 AD9957_RWBIT_WRITE = 0x80;
 
-	/* CS_High + Write command + Address */
-	sizeToTransfer=1;
-	sizeTransfered=0;
-	buffer[0] = 0xC0;/* Write command (3bits)*/
-	buffer[0] = buffer[0] | ( ( address >> 3) & 0x0F );/*5 most significant add bits*/
+	/* Write register */
+	/*     buffer[0]          |      buffer[1] */
+	/* 7   6 5 4  3   2  1  0 | 7 6 5 4 3 2 1 0*/
+	/*R/Wn X X A4 A3 A2 A1 A0 | D7...........D0*/  
+	/*>start-------------------------------end>*/
+
+	/*	Loading Instruction Byte */
+	if(address>31){
+		printf("Wrong chipAddress or Register Address!\n");
+		// return status;
+	}
+	buffer[0]=(address | AD9957_RWBIT_WRITE);
+
+	/* Write Instruction Byte */
+	sizeToTransfer = 1;
 	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
 		SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES|
 		SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE);
 	APP_CHECK_STATUS(status);
 
-	/*Write partial address bits */
-	sizeToTransfer=4;
-	sizeTransfered=0;
-	buffer[0] = ( address & 0x07 ) << 5; /* least significant 3 address bits */
-	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
-		SPI_TRANSFER_OPTIONS_SIZE_IN_BITS);
-	APP_CHECK_STATUS(status);
-
-	/*Read 2 bytes*/
-	sizeToTransfer=2;
-	sizeTransfered=0;
+	/*Read data bytes*/
+	sizeToTransfer = size;
 	status = SPI_Read(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
 		SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES|
 		SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
 	APP_CHECK_STATUS(status);
-
-	*data = (uint16)(buffer[1]<<8);
-	*data = (*data & 0xFF00) | (0x00FF & (uint16)buffer[0]);
+	for(int i=0;i<size;i++){
+		data[i] = buffer[i];
+	}
 
 	return status;
 }
@@ -126,52 +129,124 @@ static FT_STATUS read_reg(uint8 chipAddress, uint8 address, uint16 *data)
 /*						Public function definitions						  		   */
 /******************************************************************************/
 /*!
- * \brief Writes to Hittie RF PLLs with integrated VCO (Write HMC Device) 
+ * \brief Writes to AD9957 
  *
- * This function writes a register on specified address within the HMC Devices
+ * This function writes a register on specified address within the device
  *
- * \param[in] chipAddress: 3bit device address for OpenMode only, 3'b000 for all devices)
  * \param[in] address: Address of the register to write
  * \param[in] data: Data write to register
  * \return Returns status code of type FT_STATUS(see D2XX Programmer's Guide)
- * \sa Operating guide see https://www.analog.com/media/en/technical-documentation/user-guides/pll_operating_guide_rf_vcos.pdf
+ * \sa Operating guide see AD9957 Datasheet
  * \note
  * \warning
  */
-static FT_STATUS write_reg(uint8 chipAddress, uint8 address, uint32 data)
+static FT_STATUS writeReg(uint8 address, uint8 *data, uint8 size)
 {
-	uint32 sizeToTransfer = 0;
-	uint32 sizeTransfered=0;
+	uint32 sizeToTransfer = 1 + size;
+	uint32 sizeTransfered = 0;
+	// uint8 buffer[2]; //Localize SPI Buffer here!
 	FT_STATUS status;
+	static const uint8 AD9957_RWBIT_WRITE = 0x00;
 
 	/* Write register */
-	sizeToTransfer=4;
-	sizeTransfered=0;
-	/*     buffer[0]   |      buffer[1]  |  ...*/
-	/*       bit                bit         ...*/
-	/* 7 6 5 4 3 2 1 0 | 7 6 5 4 3 2 1 0 |  ...*/
+	/*     buffer[0]          |      buffer[1] */
+	/* 7   6 5 4  3   2  1  0 | 7 6 5 4 3 2 1 0*/
+	/*R/Wn X X A4 A3 A2 A1 A0 | D7...........D0*/  
 	/*>start-------------------------------end>*/
-	/*              Example:                   */
-	/*      0x9F       |        0xAA     |  ...*/
-	/* 1 0 0 1 1 1 1 1 | 1 0 1 0 1 0 1 0 |  ...*/
 
-	/*	Loading 24bit data to [31:8]	*/
-	buffer[0]=(uint8)(data>>16);/* MSB First, stop at the specified length(bits)*/
-	buffer[1]=(uint8)(data>>8);
-	buffer[2]=(uint8)(data>>0);
-
-	/*	Loading 5bit Reg address and 3bit Chip address to [7:0] */
-	/*  RegAddress[7:4] ChipAddress[3:0] */
-	if(chipAddress>7 || address>31){
+	/*	Loading Instruction Byte */
+	if(address>31){
 		printf("Wrong chipAddress or Register Address!\n");
 		// return status;
 	}
-	buffer[3]=(address<<3 | chipAddress);
+	buffer[0]=(address | AD9957_RWBIT_WRITE);
+
+	/*	Loading Data Byte to */
+	for(int i=0;i<size;i++){
+		buffer[i+1]=data[i];
+	}
 
 	status = SPI_Write(ftHandle, buffer, sizeToTransfer, &sizeTransfered,
 		SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES|
 		SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE|
 		SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE);
+	APP_CHECK_STATUS(status);
+
+#ifndef __linux__
+	Sleep(10);
+#endif
+	return status;
+}
+
+/******************************************************************************/
+/*						Public function definitions						  		   */
+/******************************************************************************/
+/*!
+ * \brief Writes to AD9957 
+ *
+ * This function writes a register on specified address within the device
+ *
+ * \param[in] address: Address of the register to write
+ * \param[in] data: Data write to register
+ * \return Returns status code of type FT_STATUS(see D2XX Programmer's Guide)
+ * \sa Operating guide see AD9957 Datasheet
+ * \note
+ * \warning
+ */
+static FT_STATUS WriteGPIOPin(uint8 dir,uint8 *val,uint8 pin, bool pinval)
+{
+	FT_STATUS status;
+	uint8 writeVal = 0x00;
+	uint8 originVal = *val;
+	if(pin > 7){
+		printf("Pin number out of range!\n");
+		return status;
+	}
+	if(pinval)
+		writeVal = ((uint8)(1 << pin)) | originVal;
+	else
+		writeVal = (~(uint8)(1 << pin)) & originVal;
+
+	status = FT_WriteGPIO(ftHandle,dir,writeVal);
+	APP_CHECK_STATUS(status);
+	*val = writeVal;
+
+#ifndef __linux__
+	Sleep(10);
+#endif
+	return status;
+}
+
+/******************************************************************************/
+/*						Public function definitions						  		   */
+/******************************************************************************/
+/*!
+ * \brief Writes to AD9957 
+ *
+ * This function writes a register on specified address within the device
+ *
+ * \param[in] address: Address of the register to write
+ * \param[in] data: Data write to register
+ * \return Returns status code of type FT_STATUS(see D2XX Programmer's Guide)
+ * \sa Operating guide see AD9957 Datasheet
+ * \note
+ * \warning
+ */
+static FT_STATUS WriteRegBit(uint8 address,uint8 *val,uint8 size,uint8 bytenum,uint8 bitnum, bool bitval)
+{
+	FT_STATUS status;
+	if(bitnum > 7){
+		printf("Pin number out of range!\n");
+		return status;
+	}
+	bytenum = size-1-bytenum;
+	if(bitval)
+		val[bytenum] = ((uint8)(1 << bitnum)) | val[bytenum];
+	else
+		val[bytenum] = (~(uint8)(1 << bitnum)) & val[bytenum];
+
+
+	status = writeReg(address,val,size);
 	APP_CHECK_STATUS(status);
 
 #ifndef __linux__
@@ -198,15 +273,26 @@ int main()
 	FT_DEVICE_LIST_INFO_NODE devList = {0};
 	ChannelConfig channelConf = {0};
 	uint8 address = 0;
+	uint8 size = 0;
+	uint8 *data;
+	uint8 bytenum = 0;
+	uint8 bitnum = 1;
+	bool bitval = 1;
 	uint32 channels = 0;
-	uint32 data = 0;
 	uint8 i = 0;
-	uint8 latency = 255;	
+	uint8 latency = 255;
+	uint8 GPIODir = 0xFF;
+	uint8 GPIOVal = 0x00;	
+
+	uint8 CFR1Val[CFR1_W] = {0x00,0x00,0x00,0x00};
+	uint8 CFR2Val[CFR2_W] = {0x00,0x00,0x00,0x00};
+	uint8 IO_UP_RATEVal[IO_UP_RATE_W] = {0x00,0x00,0x01,0x00}; //256 div
+	uint8 PROFILE0Val[PROFILE0_W] = {0x3F,0xFF, 0x00,0x00, 0x11,0xEB,0x85,0x1F}; //2'b00,14'd16383,16'd0,32'd300647711
 	
-	channelConf.ClockRate = 5000;
+	channelConf.ClockRate = 5000; //div 5 for sclk frequency on FT232D
 	channelConf.LatencyTimer = latency;
 	channelConf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 | SPI_CONFIG_OPTION_CS_ACTIVELOW;// | SPI_CONFIG_OPTION_CS_ACTIVELOW;
-	channelConf.Pin = 0xffFFffFF;/*FinalVal-FinalDir-InitVal-InitDir (for dir 0=in, 1=out)*/
+	channelConf.Pin = 0x00000000;/*FinalVal-FinalDir-InitVal-InitDir (for dir 0=in, 1=out)*/
 
 	/* init library */
 #ifdef _MSC_VER
@@ -241,14 +327,143 @@ int main()
 		APP_CHECK_STATUS(status);
 		printf("\nhandle=0x%x status=0x%x SPI Channel Init done. All pins are configured!\n",(unsigned int)ftHandle,status);
 
-		address = 0x04;
-		data = 0xF0F0F0;
-		printf("writing address = %02d data = %x\n",address,data);
-		write_reg(CHIP_ADDR_ALL, address, data);
-		printf("Write done.\n");
+		/* Initialize GPIO Pins */
+		status = FT_WriteGPIO(ftHandle,GPIODir,GPIOVal);
+		status = WriteGPIOPin(GPIODir,&GPIOVal,EXT_PWR_DWN,0);
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_RESET,0);
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,0);
+		status = WriteGPIOPin(GPIODir,&GPIOVal,MASTER_RESET,0);
+		usleep(100);
 
-		// read_reg(SPI_SLAVE_0, address,&data);
-		// printf("reading address = %02d data = %d\n",address,data);
+		/* Master Reset */
+		status = WriteGPIOPin(GPIODir,&GPIOVal,MASTER_RESET,1);
+		usleep(10);	//Minimum pulse width is 5 SYSCLK period
+		status = WriteGPIOPin(GPIODir,&GPIOVal,MASTER_RESET,0);
+		usleep(150); //Recovery time from full sleep mode
+
+		/* Enable SDO */
+		address = CFR1;
+		size = CFR1_W;
+		data = CFR1Val;
+		bytenum = 0;
+		bitnum = 1;
+		bitval = 1;
+		WriteRegBit(address,data,size,bytenum,bitnum,bitval);
+		printf("Write Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,1);
+		usleep(10);
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,0);
+		// getchar();
+
+		readReg(address,data,size);
+		printf("Read  Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+
+		/* Set IO_UPDATE Rate */
+		address = IO_UP_RATE;
+		size = IO_UP_RATE_W;
+		data = IO_UP_RATEVal; // div SYSCLK/4/2^A/B , 256 here
+		writeReg(address,data,size);
+		printf("Write Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,1);
+		usleep(10);
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,0);
+		// getchar();
+
+		readReg(address,data,size);
+		printf("Read  Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+
+		/* Enable Interal Generated IO_UPDATE */
+		address = CFR2;
+		size = CFR2_W;
+		data = CFR2Val;
+		readReg(address,data,size);
+		printf("Read  Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+
+		bytenum = 2;
+		bitnum = 7;
+		bitval = 1;
+		WriteRegBit(address,data,size,bytenum,bitnum,bitval);
+		printf("Write Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,1);
+		usleep(10);
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,0);
+		// getchar();
+		GPIODir = GPIODir & 0xF7; //set IO_UPDATE as input pin
+		status = WriteGPIOPin(GPIODir,&GPIOVal,IO_UPDATE,1);
+
+		readReg(address,data,size);
+		printf("Read  Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+
+		/* Set mode to Single-Tone */
+		address = CFR1;
+		size = CFR1_W;
+		data = CFR1Val;
+		bytenum = 3;
+		bitnum = 0;
+		bitval = 1;
+		WriteRegBit(address,data,size,bytenum,bitnum,bitval);
+		printf("Write Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+		usleep(10);
+		// getchar();
+
+		readReg(address,data,size);
+		printf("Read  Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+
+		/* Set Profile0 */
+		address = PROFILE0;
+		size = PROFILE0_W;
+		data = PROFILE0Val; // div SYSCLK/4/2^A/B , 256 here
+		writeReg(address,data,size);
+		printf("Write Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
+		usleep(10);
+		// getchar();
+
+		readReg(address,data,size);
+		printf("Read  Reg %2x done : ",address);
+		for(int i=0;i<size;i++){
+			printf("%2x ",data[i]);
+		}
+		printf("\n");
 
 		status = SPI_CloseChannel(ftHandle);
 		printf("SPI Channel Closed.\n");

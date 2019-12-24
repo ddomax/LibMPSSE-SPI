@@ -292,7 +292,7 @@ int main()
 	channelConf.ClockRate = 5000; //div 5 for sclk frequency on FT232D
 	channelConf.LatencyTimer = latency;
 	channelConf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 | SPI_CONFIG_OPTION_CS_ACTIVELOW;// | SPI_CONFIG_OPTION_CS_ACTIVELOW;
-	channelConf.Pin = 0x00000000;/*FinalVal-FinalDir-InitVal-InitDir (for dir 0=in, 1=out)*/
+	channelConf.Pin = 0x08FD08FD;/*FinalVal-FinalDir-InitVal-InitDir (for dir 0=in, 1=out)*/
 
 	/* init library */
 #ifdef _MSC_VER
@@ -342,6 +342,7 @@ int main()
 		usleep(150); //Recovery time from full sleep mode
 
 		/* Enable SDO */
+		printf("Enable SDO:\n");
 		address = CFR1;
 		size = CFR1_W;
 		data = CFR1Val;
@@ -367,6 +368,7 @@ int main()
 		printf("\n");
 
 		/* Set IO_UPDATE Rate */
+		printf("Set IO_UPDATE Rate:\n");
 		address = IO_UP_RATE;
 		size = IO_UP_RATE_W;
 		data = IO_UP_RATEVal; // div SYSCLK/4/2^A/B , 256 here
@@ -389,6 +391,7 @@ int main()
 		printf("\n");
 
 		/* Enable Interal Generated IO_UPDATE */
+		printf("Enable Internal Generated IO_UPDATE:\n");
 		address = CFR2;
 		size = CFR2_W;
 		data = CFR2Val;
@@ -423,6 +426,7 @@ int main()
 		printf("\n");
 
 		/* Set mode to Single-Tone */
+		printf("Set mode to Single-Tone:\n");
 		address = CFR1;
 		size = CFR1_W;
 		data = CFR1Val;
@@ -435,7 +439,7 @@ int main()
 			printf("%2x ",data[i]);
 		}
 		printf("\n");
-		usleep(10);
+		// usleep(1);
 		// getchar();
 
 		readReg(address,data,size);
@@ -446,6 +450,7 @@ int main()
 		printf("\n");
 
 		/* Set Profile0 */
+		printf("Set Profile0:\n");
 		address = PROFILE0;
 		size = PROFILE0_W;
 		data = PROFILE0Val; // div SYSCLK/4/2^A/B , 256 here
@@ -455,7 +460,7 @@ int main()
 			printf("%2x ",data[i]);
 		}
 		printf("\n");
-		usleep(10);
+		// usleep(1);
 		// getchar();
 
 		readReg(address,data,size);
